@@ -1,25 +1,51 @@
 mod file;
 
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use iced::Element;
 use iced::widget::text_editor::{Binding, KeyPress};
-use iced::widget::{column, container, pick_list, row, text, text_editor};
+use iced::widget::{button, column, container, pick_list, row, text, text_editor};
 use iced::window::icon;
 use iced::{Font, Length, Theme};
 use iced::{keyboard, window};
 use rfd::FileDialog;
 
+use crate::file::load_file_from_disk;
+
 const CUSTOM_FONT: Font = Font::with_name("CaskaydiaCove Nerd Font Mono");
+const DEFAULT_EDITOR_FONT_SIZE: u32 = 16;
 const MAX_EDITOR_FONT_SIZE: u32 = 80;
 const MIN_EDITOR_FONT_SIZE: u32 = 12;
 
+// TODO: Need to reconsider the way
+// we are holding on to files. Maybe
+// vec is not best
+
+// TODO: Need to handle having more tabs
+// then can be displayed in the container
+// given it's current width
+
+// TODO: We need to style the button tab
+// according to which is currently focused
+// in the editor
+
+// TODO: Handle creating new files
+
+// TODO: Opening another window
+
+struct File {
+    path: Option<PathBuf>,
+}
+
 #[derive(Default)]
 struct State {
+    files: Vec<File>,
     file_path: Option<PathBuf>,
     content: text_editor::Content,
     editor_font_size: u32,
     selected_file_action: Option<FileAction>,
+    selected_view_action: Option<ViewAction>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,15 +56,40 @@ enum FileAction {
 }
 
 impl FileAction {
-    const ALL: &'static [FileAction] = &[FileAction::SaveAs, FileAction::Open, FileAction::Save];
+    const ALL: &'static [FileAction] = &[FileAction::Save, FileAction::SaveAs, FileAction::Open];
 }
 
 impl std::fmt::Display for FileAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FileAction::Save => write!(f, "Save"),
-            FileAction::SaveAs => write!(f, "Save As... "),
+            FileAction::SaveAs => write!(f, "Save as... "),
             FileAction::Open => write!(f, "Open"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViewAction {
+    IncreaseFont,
+    DecreaseFont,
+    ResetFont,
+}
+
+impl ViewAction {
+    const ALL: &'static [ViewAction] = &[
+        ViewAction::IncreaseFont,
+        ViewAction::DecreaseFont,
+        ViewAction::ResetFont,
+    ];
+}
+
+impl std::fmt::Display for ViewAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ViewAction::DecreaseFont => write!(f, "Decrease font"),
+            ViewAction::IncreaseFont => write!(f, "Increase font"),
+            ViewAction::ResetFont => write!(f, "Reset font"),
         }
     }
 }
@@ -47,8 +98,8 @@ impl std::fmt::Display for FileAction {
 enum Message {
     Edit(text_editor::Action),
     FileActionSelected(FileAction),
-    IncreaseFont,
-    DecreaseFont,
+    ViewActionSelected(ViewAction),
+    SwitchTab(PathBuf),
 }
 
 fn theme(_state: &State) -> Theme {
@@ -59,6 +110,19 @@ fn view(state: &State) -> Element<'_, Message> {
     // TODO: Expose the zooming functionality
     // through a menu
 
+    let mut tab_row = row![];
+
+    for file in &state.files {
+        if let Some(p) = &file.path {
+            let button_text = text(p.to_string_lossy().to_string());
+            let button = button(button_text)
+                .on_press(Message::SwitchTab(p.clone()));
+            tab_row = tab_row.push(button);
+        }
+    }
+
+    let tabs = container(tab_row);
+
     let file_menu = pick_list(
         FileAction::ALL,
         state.selected_file_action,
@@ -66,7 +130,14 @@ fn view(state: &State) -> Element<'_, Message> {
     )
     .placeholder("File");
 
-    let action_bar = container(row![file_menu]);
+    let view_menu = pick_list(
+        ViewAction::ALL,
+        state.selected_view_action,
+        Message::ViewActionSelected,
+    )
+    .placeholder("View");
+
+    let action_bar = container(row![file_menu, view_menu].spacing(5));
 
     let editor = text_editor(&state.content)
         .size(state.editor_font_size)
@@ -77,22 +148,33 @@ fn view(state: &State) -> Element<'_, Message> {
             let o = keyboard::Key::Character("o".into());
             let minus = keyboard::Key::Character("-".into());
             let equals = keyboard::Key::Character("=".into());
-
+            let zero = keyboard::Key::Character("0".into());
 
             let is_open = key_press.modifiers.command() && key_press.key == o;
             let is_save = key_press.modifiers.command() && key_press.key == s;
             let is_save_as =
                 key_press.modifiers.command() && key_press.modifiers.shift() && key_press.key == s;
 
-            let is_increase_font = key_press.modifiers.command() && key_press.modifiers.shift() && key_press.key == equals;
+            let is_increase_font = key_press.modifiers.command() && key_press.key == equals;
             let is_decrease_font = key_press.modifiers.command() && key_press.key == minus;
-            
+            let is_reset_font = key_press.modifiers.command() && key_press.key == zero;
+
+            if is_reset_font {
+                return Some(Binding::Custom(Message::ViewActionSelected(
+                    ViewAction::ResetFont,
+                )));
+            }
+
             if is_increase_font {
-                return Some(Binding::Custom(Message::IncreaseFont));
+                return Some(Binding::Custom(Message::ViewActionSelected(
+                    ViewAction::IncreaseFont,
+                )));
             }
 
             if is_decrease_font {
-                return Some(Binding::Custom(Message::DecreaseFont));
+                return Some(Binding::Custom(Message::ViewActionSelected(
+                    ViewAction::DecreaseFont,
+                )));
             }
 
             if is_save_as {
@@ -134,7 +216,7 @@ fn view(state: &State) -> Element<'_, Message> {
 
     let status_bar = container(row![file_path_text, cursor_text].spacing(10));
 
-    container(column![action_bar, editor_container, status_bar].spacing(10))
+    container(column![tabs, action_bar, editor_container, status_bar].spacing(10))
         .padding(10)
         .into()
 }
@@ -200,26 +282,44 @@ fn update(state: &mut State, message: Message) {
                 }
             }
         }
-        Message::IncreaseFont => {
-            if state.editor_font_size >= MAX_EDITOR_FONT_SIZE {
-                return;
-            }
+        Message::ViewActionSelected(action) => {
+            state.selected_view_action = None;
 
-            state.editor_font_size += 2;
+            match action {
+                ViewAction::IncreaseFont => {
+                    if state.editor_font_size >= MAX_EDITOR_FONT_SIZE {
+                        return;
+                    }
+
+                    state.editor_font_size += 2;
+                }
+                ViewAction::DecreaseFont => {
+                    if state.editor_font_size <= MIN_EDITOR_FONT_SIZE {
+                        return;
+                    }
+
+                    state.editor_font_size -= 2;
+                }
+                ViewAction::ResetFont => state.editor_font_size = DEFAULT_EDITOR_FONT_SIZE,
+            }
         },
-        Message::DecreaseFont => {
-            if state.editor_font_size <= MIN_EDITOR_FONT_SIZE {
-                return;
-            }
-
-            state.editor_font_size -= 2;
-        }
+        Message::SwitchTab(path) => {
+            let file_content = load_file_from_disk(path.clone());
+            state.content = text_editor::Content::with_text(&file_content);
+            state.file_path = Some(path);
+        },
     }
 }
 
 fn boot() -> State {
     State {
-        editor_font_size: 16,
+        files: vec![File {
+            path: Some(
+                PathBuf::from_str("C:/Users/sfree/OneDrive/Desktop/demo.txt").expect("Bad path"),
+            ),
+            content: text_editor::Content::new(),
+        }],
+        editor_font_size: DEFAULT_EDITOR_FONT_SIZE,
         ..Default::default()
     }
 }
