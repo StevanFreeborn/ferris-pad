@@ -1,7 +1,7 @@
 mod file;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use iced::Element;
 use iced::widget::text_editor::{Binding, KeyPress};
@@ -34,13 +34,9 @@ const MIN_EDITOR_FONT_SIZE: u32 = 12;
 
 // TODO: Opening another window
 
-struct File {
-    path: Option<PathBuf>,
-}
-
 #[derive(Default)]
 struct State {
-    files: Vec<File>,
+    files: HashMap<Option<PathBuf>, bool>,
     file_path: Option<PathBuf>,
     content: text_editor::Content,
     editor_font_size: u32,
@@ -107,16 +103,18 @@ fn theme(_state: &State) -> Theme {
 }
 
 fn view(state: &State) -> Element<'_, Message> {
-    // TODO: Expose the zooming functionality
-    // through a menu
-
     let mut tab_row = row![];
 
     for file in &state.files {
-        if let Some(p) = &file.path {
-            let button_text = text(p.to_string_lossy().to_string());
-            let button = button(button_text)
-                .on_press(Message::SwitchTab(p.clone()));
+        if let Some(p) = &file.0 {
+            let file_name = p.file_name()
+                .expect("unable to get file name")
+                .to_str()
+                .expect("unable to get file name");
+            
+            let button_text = text(file_name).wrapping(text::Wrapping::None);
+            let button = button(button_text).on_press(Message::SwitchTab(p.clone()));
+
             tab_row = tab_row.push(button);
         }
     }
@@ -271,14 +269,23 @@ fn update(state: &mut State, message: Message) {
             state.selected_file_action = None;
 
             match action {
-                FileAction::SaveAs => state.file_path = save_file_as(state.content.text()),
+                FileAction::SaveAs => {
+                    let path = save_file_as(state.content.text());
+                    state.file_path = path.clone();
+                    state.files.insert(path, true);
+                }
                 FileAction::Open => {
                     let (path, content) = open_file();
                     state.content = text_editor::Content::with_text(&content);
-                    state.file_path = Some(path);
+                    
+                    let path_option = Some(path);
+                    state.file_path = path_option.clone();
+                    state.files.insert(path_option, true);
                 }
                 FileAction::Save => {
-                    state.file_path = save_file(state.file_path.clone(), state.content.text());
+                    let path = save_file(state.file_path.clone(), state.content.text());
+                    state.file_path = path.clone();
+                    state.files.insert(path, true);
                 }
             }
         }
@@ -302,23 +309,17 @@ fn update(state: &mut State, message: Message) {
                 }
                 ViewAction::ResetFont => state.editor_font_size = DEFAULT_EDITOR_FONT_SIZE,
             }
-        },
+        }
         Message::SwitchTab(path) => {
             let file_content = load_file_from_disk(path.clone());
             state.content = text_editor::Content::with_text(&file_content);
             state.file_path = Some(path);
-        },
+        }
     }
 }
 
 fn boot() -> State {
     State {
-        files: vec![File {
-            path: Some(
-                PathBuf::from_str("C:/Users/sfree/OneDrive/Desktop/demo.txt").expect("Bad path"),
-            ),
-            content: text_editor::Content::new(),
-        }],
         editor_font_size: DEFAULT_EDITOR_FONT_SIZE,
         ..Default::default()
     }
